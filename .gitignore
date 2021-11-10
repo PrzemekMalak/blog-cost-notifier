@@ -1,0 +1,5 @@
+package-lock.json
+.serverless/
+__pycache__/account.cpython-38.pyc
+__pycache__/
+node_modules/

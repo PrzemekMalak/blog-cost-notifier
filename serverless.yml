@@ -1,0 +1,115 @@
+service: cost-by-account-report
+frameworkVersion: '2'
+
+custom:
+  logRetentionInDays: 30
+
+provider:
+  name: aws
+  runtime: python3.8
+  lambdaHashingVersion: 20201221
+  region: eu-west-1
+
+  iamRoleStatements:
+    - Effect: "Allow"
+      Action:
+        - "ce:GetCostForecast"
+        - "ce:GetCostAndUsage"
+        - "organizations:ListAccounts"
+      Resource: '*'
+    - Effect: "Allow"
+      Action:
+      - "sns:Publish"
+      Resource: 
+      - '*'
+    - Effect: "Allow"
+      Action:
+      - "kms:Decrypt"
+      - "kms:GenerateDataKey*"
+      Resource: 
+      - !GetAtt SNSKey.Arn
+
+plugins:
+  - serverless-plugin-log-retention
+
+package:
+  patterns:
+    - '!node_modules/**'
+
+functions:
+  get-costs:
+    memorySize: 128
+    timeout: 120
+    handler: handler.handler
+    environment:
+      SNS_TOPIC: !Ref CostsNotificationTopic
+      SNS_ALARM_TOPIC: !Ref CostsAlarmNotificationTopic
+    events:
+    - schedule: 
+        rate: cron(0 6 * * ? *)
+
+
+
+resources:
+ Resources:
+  SNSKey:
+    Type: AWS::KMS::Key
+    Properties: 
+      Description: 'The key used for SNS topic encryption'
+      Enabled: true
+      EnableKeyRotation: true
+      KeyPolicy: 
+        Version: '2012-10-17'
+        Statement:
+        - Sid: Enable IAM User Permissions
+          Effect: Allow
+          Principal:
+            AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+          Action: kms:*
+          Resource: '*'
+      KeySpec: SYMMETRIC_DEFAULT
+      KeyUsage: ENCRYPT_DECRYPT
+      PendingWindowInDays: 7
+
+  CostsNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${AWS::StackName}-CostsNotificationTopic'
+      KmsMasterKeyId: !Ref SNSKey
+      DisplayName: !Sub '${AWS::StackName}-CostsNotificationTopic'
+
+  CostsAlarmNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${AWS::StackName}-CostsAlarmNotificationTopic'
+      KmsMasterKeyId: !Ref SNSKey
+      DisplayName: !Sub '${AWS::StackName}-CostsAlarmNotificationTopic'
+
+
+  CostsNotificationTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal: '*' 
+          Action: sns:Publish
+          Resource: 
+          - 'Fn::Join':
+            - ':'
+            -
+              - 'arn:aws:lambda'
+              - ${self:provider.region}
+              - Ref: 'AWS::AccountId'
+              - 'function'
+              - 'Fn::Join':
+                - '-'
+                -
+                  - ${self:service}
+                  - ${opt:stage, self:provider.stage, 'dev'}
+                  - 'get-costs'
+      Topics:
+      - !Ref CostsNotificationTopic
+      - !Ref CostsAlarmNotificationTopic
+
